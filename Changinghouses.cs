@@ -1,6 +1,5 @@
 /*
 ----             DAVSTRIL COMPANY                ----   
---- All rights reserved, it is forbidden to copy. ---
 */
 
 using System.Collections;
