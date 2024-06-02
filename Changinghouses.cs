@@ -1,45 +1,110 @@
-/*
-----             DAVSTRIL COMPANY                ----   
-*/
-
 using System.Collections;
 using UnityEngine;
 using TMPro;
 using System.Globalization;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
+using YG;
 
 public class ChangingHouses : MonoBehaviour
 {
-    [SerializeField] private Button leftBtn, nextBtn, clicker, buyLock, upgradeButton;
-    [SerializeField] private TMP_Text moneyTxt, upgradeText;
-    [SerializeField] private int money;
+    [SerializeField] private Button leftBtn, nextBtn, clicker, buyLock, upgradeButton, adsButton;
+    [SerializeField] private TMP_Text moneyTxt, upgradeText, AdText;
     [SerializeField] private int[] houseCosts, upgradeCosts, clickUpgrades;
     [SerializeField] private AudioClip clickSound;
+    [SerializeField] private ParticleSystem clickParticles;
+    [SerializeField] private Sprite[] clickSprites;
+    private const int rewardAmount = 5000;
     private AudioSource audioSource;
     private int clickValue = 1, upgradeLevel = 0, currentHouse;
     private bool[] housesPurchased;
+    [SerializeField] private int money;
+    public int language;
 
     private void Awake()
     {
         audioSource = GetComponent<AudioSource>();
+        InitializeSavesData();
         LoadProgress();
+    }
+    
+    private void InitializeSavesData()
+    {
+        if (YandexGame.savesData == null)
+        {
+            YandexGame.savesData = new YG.SavesYG();
+            YandexGame.savesData.housesPurchased = new bool[houseCosts.Length];
+        }
+    }
+
+    public void RussianLanguage()
+    {
+        language = 0;
+        PlayerPrefs.SetInt("language", language);
+        SceneManager.LoadScene("SampleScene");
+    }
+
+    public void EnglishLanguage()
+    {
+        language = 1;
+        PlayerPrefs.SetInt("language", language);
+        SceneManager.LoadScene("SampleScene");
     }
 
     private void Start()
     {
+        language = PlayerPrefs.GetInt("language", language); // загружаем язык
         SelectHouse(0);
         UpdateUI();
         upgradeButton.onClick.AddListener(UpgradeClick);
+        adsButton.onClick.AddListener(() => ShowAd(1));
         ClearUpgradeTextIfMaxed();
     }
 
-    private void Update()
-{
-    if (Input.GetKeyDown(KeyCode.Space))
+    public void ShowAd(int id)
     {
-        Btn_Click();
+        YandexGame.RewardVideoEvent += OnAdReward;
+        YandexGame.RewardVideoShow(id);
     }
-}
+
+    private void OnAdReward(int id, bool adShownSuccessfully)
+    {
+        if (id == 1)
+        {
+            if (adShownSuccessfully)
+            {
+                RewardPlayer();
+            }
+            else
+            {
+                if (language == 0)
+                {
+                    AdText.text = "Деньги будут зачислены только после просмотра рекламы!";
+                }
+                else if (language == 1)
+                {
+                    AdText.text = "The money will be credited only after viewing the advertisement!";
+                }
+                StartCoroutine(ClearTextAfterDelay(AdText, 3));
+            }
+        }
+        YandexGame.RewardVideoEvent -= OnAdReward;
+    }
+
+    public void RewardPlayer()
+    {
+        money += rewardAmount;
+        UpdateMoneyText();
+        SaveProgress();
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Space) && housesPurchased[currentHouse])
+        {
+            Btn_Click();
+        }
+    }
 
     private void ClearUpgradeTextIfMaxed()
     {
@@ -47,95 +112,149 @@ public class ChangingHouses : MonoBehaviour
             upgradeText.text = "";
     }
 
+    private bool isUpgradeInProgress = false;
+
     public void UpgradeClick()
     {
+        if (isUpgradeInProgress)
+        {
+            return;
+        }
+
+        Debug.Log("Upgrade button clicked");
+
         if (upgradeLevel >= upgradeCosts.Length)
         {
-            upgradeText.text = "Вы приобрели все улучшения";
+            if (language == 0)
+            {
+                upgradeText.text = "Вы приобрели все улучшения";
+            }
+            else if (language == 1)
+            {
+                upgradeText.text = "You have purchased all the improvements";
+            }
+            upgradeButton.interactable = false;
+            Debug.Log("All upgrades purchased");
             return;
         }
 
         int cost = upgradeCosts[upgradeLevel];
-        if (money < cost)
+        Debug.Log($"Current upgrade level: {upgradeLevel}, Upgrade cost: {cost}, Money available: {money}");
+
+        if (money >= cost)
+        {
+            money -= cost;
+            clickValue = clickUpgrades[upgradeLevel++];
+            Debug.Log($"Upgrade successful. New click value: {clickValue}, New upgrade level: {upgradeLevel}");
+
+            // Сразу показываем текст об улучшении
+            ShowUpgrade(clickValue);
+
+            // Сохраняем прогресс и обновляем интерфейс
+            SaveProgress();
+            UpdateUI();
+
+            // Блокируем кнопку улучшения на 5 секунд
+            isUpgradeInProgress = true;
+            StartCoroutine(BlockUpgradeButton(5));
+
+            // Проверка, если достигли максимального уровня улучшений
+            if (upgradeLevel >= upgradeCosts.Length)
+            {
+                if (language == 0)
+                {
+                    upgradeText.text = "Вы приобрели все улучшения";
+                }
+                else if (language == 1)
+                {
+                    upgradeText.text = "You have purchased all the improvements";
+                }
+                upgradeButton.interactable = false;
+                Debug.Log("Reached maximum upgrade level");
+            }
+        }
+        else
         {
             ShowInsufficientFunds(cost);
-            return;
         }
-
-        PurchaseUpgrade(cost);
     }
 
-    private void PurchaseUpgrade(int cost)
+    private void ShowInsufficientFunds(int cost)
     {
-        money -= cost;
-        clickValue = clickUpgrades[upgradeLevel++];
-        StartCoroutine(ShowUpgrade(clickValue));
-        SaveProgress();
-        UpdateUI();
-
-        if (upgradeLevel == upgradeCosts.Length)
+        int neededMoney = cost - money;
+        if (language == 0)
         {
-            upgradeText.text = "Вы приобрели все улучшения";
-            upgradeButton.interactable = false;
-            PlayerPrefs.SetInt("allUpgradesPurchased", 1);
+            upgradeText.text = $"У вас недостаточно денег на улучшения, вам нужно ещё {neededMoney}";
         }
+        else if (language == 1)
+        {
+            upgradeText.text = $"You don't have enough money for improvements, you need {neededMoney} more";
+        }
+        Debug.Log($"Insufficient funds: need {neededMoney} more");
+        StartCoroutine(ClearTextAfterDelay(upgradeText, 3));
     }
 
-private void ShowInsufficientFunds(int cost)
-{
-    int neededMoney = cost - money;
-    if (neededMoney > 0)
-    {
-        upgradeText.text = $"Вам не хватает денег для улучшений, вам осталось {neededMoney}";
-    }
-    else
-    {
-        upgradeText.text = $"Улучшение на {clickUpgrades[upgradeLevel]}";
-    }
-    StartCoroutine(ClearUpgradeText());
-}
-
-    private IEnumerator ShowUpgrade(int upgradeAmount)
+    private void ShowUpgrade(int upgradeAmount)
     {
         upgradeText.text = $"+{upgradeAmount}";
-        yield return new WaitForSeconds(2);
-        upgradeText.text = "";
+        Canvas.ForceUpdateCanvases();
+        Debug.Log($"Upgrade text shown: +{upgradeAmount}");
+        StartCoroutine(ClearTextAfterDelay(upgradeText, 3));
     }
 
-    private IEnumerator ClearUpgradeText()
+    private IEnumerator BlockUpgradeButton(float delay)
     {
-        yield return new WaitForSeconds(2);
-        upgradeText.text = "";
+        upgradeButton.interactable = false;
+        yield return new WaitForSeconds(delay);
+        upgradeButton.interactable = true;
+        isUpgradeInProgress = false;
+    }
+
+    private IEnumerator ClearTextAfterDelay(TMP_Text textComponent, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        Debug.Log("Clearing text after delay");
+        textComponent.text = "";
     }
 
     public void Btn_Click()
     {
         money += clickValue;
-        audioSource.PlayOneShot(clickSound); 
+        audioSource.PlayOneShot(clickSound);
+        EmitClickParticles();
         SaveProgress();
         UpdateMoneyText();
     }
 
+    private void EmitClickParticles()
+    {
+        var particleRenderer = clickParticles.GetComponent<ParticleSystemRenderer>();
+
+        if (upgradeLevel < clickSprites.Length && clickSprites[upgradeLevel] != null)
+        {
+            Texture2D texture = clickSprites[upgradeLevel].texture;
+            if (texture != null)
+            {
+                Material material = new Material(particleRenderer.sharedMaterial)
+                {
+                    mainTexture = texture
+                };
+                particleRenderer.sharedMaterial = material;
+                particleRenderer.sharedMaterial.color = Color.white;
+                clickParticles.Emit(1);
+            }
+        }
+    }
+
     public void ResetProgress()
     {
-        PlayerPrefs.SetInt("money", 100);
-        PlayerPrefs.SetInt("upgradeLevel", 0); 
-        PlayerPrefs.SetInt("clickValue", 1); 
-        for (int i = 0; i < housesPurchased.Length; i++)
-        {
-            PlayerPrefs.SetInt("house" + i, 0);
-        }
-        PlayerPrefs.Save();
-
         money = 100;
-        upgradeLevel = 0; 
-        clickValue = 1; 
-        for (int i = 0; i < housesPurchased.Length; i++)
-        {
-            housesPurchased[i] = false;
-        }
-        upgradeButton.interactable = true; 
-        UpdateUI(); 
+        upgradeLevel = 0;
+        clickValue = 1;
+        housesPurchased = new bool[houseCosts.Length];
+
+        SaveAllPrefs();
+        UpdateUI();
     }
 
     public void Buy()
@@ -147,7 +266,7 @@ private void ShowInsufficientFunds(int cost)
             money -= cost;
             housesPurchased[currentHouse] = true;
             SaveProgress();
-            UpdateUI(); 
+            UpdateUI();
         }
     }
 
@@ -168,6 +287,12 @@ private void ShowInsufficientFunds(int cost)
 
     private void UpdateButtons()
     {
+        if (housesPurchased == null)
+        {
+            Debug.LogError("housesPurchased array not initialized!");
+            return;
+        }
+
         bool isPurchased = housesPurchased[currentHouse];
         buyLock.gameObject.SetActive(!isPurchased);
         clicker.gameObject.SetActive(isPurchased);
@@ -182,8 +307,7 @@ private void ShowInsufficientFunds(int cost)
                 SpriteRenderer spriteRenderer = houseTransform.GetComponent<SpriteRenderer>();
                 if (spriteRenderer != null)
                 {
-                    Color houseColor = isPurchased ? Color.white : Color.black;
-                    spriteRenderer.color = houseColor;
+                    spriteRenderer.color = isPurchased ? Color.white : Color.black;
                 }
             }
         }
@@ -203,45 +327,46 @@ private void ShowInsufficientFunds(int cost)
         {
             transform.GetChild(i).gameObject.SetActive(i == idx);
         }
-        UpdateButtons(); 
+        UpdateButtons();
     }
 
     private void LoadProgress()
     {
-        money = PlayerPrefs.GetInt("money", 100); 
-        upgradeLevel = PlayerPrefs.GetInt("upgradeLevel", 0); 
-
-        if (upgradeLevel >= 0 && upgradeLevel < clickUpgrades.Length)
+        if (PlayerPrefs.GetInt("firstLaunch", 1) == 1)
         {
-            clickValue = clickUpgrades[upgradeLevel]; 
+            ResetProgress();
         }
         else
         {
-            upgradeLevel = clickUpgrades.Length - 1;
-            clickValue = clickUpgrades[upgradeLevel];
-        }
-
-        if (PlayerPrefs.GetInt("allUpgradesPurchased", 0) == 1)
-        {
-            upgradeText.text = "Вы приобрели все улучшения";
-            upgradeButton.interactable = false;
-        }
-
-        housesPurchased = new bool[houseCosts.Length];
-        for (int i = 0; i < houseCosts.Length; i++)
-        {
-            housesPurchased[i] = PlayerPrefs.GetInt("house" + i, 0) == 1;
+            YandexGame.LoadProgress(houseCosts.Length);
+            money = YandexGame.savesData.money;
+            upgradeLevel = YandexGame.savesData.upgradeLevel;
+            clickValue = YandexGame.savesData.clickValue;
+            housesPurchased = YandexGame.savesData.housesPurchased;
+            UpdateUI();
         }
     }
 
     private void SaveProgress()
     {
+        SaveAllPrefs();
+        YandexGame.savesData.money = money;
+        YandexGame.savesData.upgradeLevel = upgradeLevel;
+        YandexGame.savesData.clickValue = clickValue;
+        YandexGame.savesData.housesPurchased = housesPurchased;
+        YandexGame.SaveProgress();
+    }
+
+    private void SaveAllPrefs()
+    {
         PlayerPrefs.SetInt("money", money);
         PlayerPrefs.SetInt("upgradeLevel", upgradeLevel);
+        PlayerPrefs.SetInt("clickValue", clickValue);
         for (int i = 0; i < housesPurchased.Length; i++)
         {
             PlayerPrefs.SetInt("house" + i, housesPurchased[i] ? 1 : 0);
         }
-        PlayerPrefs.Save(); 
+        PlayerPrefs.SetInt("firstLaunch", 0);
+        PlayerPrefs.Save();
     }
 }
